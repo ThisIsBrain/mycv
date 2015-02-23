@@ -15,9 +15,7 @@ mycv::FindFigure::FindFigure(CvSize imgSize, int minR, int maxR)
 	
 	//аккумулятор для поиска окружностей
 	this->accum4circle = cvCreateImage(imgSize, 8, maxR-minR+1);
-	
-	//хранилище для контуров
-	this->storage=cvCreateMemStorage(0);
+	this->accum4circle2.init(imgSize.width, imgSize.height);
 	}
 //==============================================================================
 
@@ -25,7 +23,6 @@ mycv::FindFigure::FindFigure(CvSize imgSize, int minR, int maxR)
 //==============================================================================
 mycv::FindFigure::~FindFigure()
 	{
-	cvReleaseMemStorage(&this->storage);
 	cvReleaseImage(&this->accum4circle);
 	}
 //==============================================================================
@@ -70,7 +67,7 @@ int mycv::FindFigure::findLine(IplImage* src,
 							&dominantPoints,			//точки 
 							dominantPoints.begin(),		//начало прямой
 							dIt,		//конец прямой
-							2.0);						//точность
+							1.6);						//точность
 
 	//4. Записываем параметры прямых
 		mycv::DominantPointsIt endIt = dominantPoints.end();
@@ -157,7 +154,9 @@ int mycv::FindFigure::findCircle(IplImage* src,
 			end.x=pt.x+i->a*(float)(this->maxRadius)/vector; //x0+a*step
 			end.y=pt.y+i->b*(float)(this->maxRadius)/vector;
 			
-			mycv::drawLineB(this->accum4circle, &begin, &end, 1);
+			mycv::drawLineB(this->accum4circle,
+							&this->accum4circle2,
+							&begin, &end, 1, i);
 			
 			i->a *= -1;
 			i->b *= -1;
@@ -174,8 +173,11 @@ int mycv::FindFigure::findCircle(IplImage* src,
 	t1=clock();
 #endif	
 		
+	IplImage* circ = cvCreateImage(cvGetSize(src), 8, 1);
+	cvZero(circ);
+	
 	//3. Уточнение окружностей
-	int threshold = 5;					//вес точки необходимый для того чтобы ее можно было считать потенциальным центром 
+	int threshold = 2;					//вес точки необходимый для того чтобы ее можно было считать потенциальным центром 
 	int value;							//вес текущей точки 
 	CvPoint pt;							//точка в поле потенциальных прямых
 	
@@ -187,33 +189,28 @@ int mycv::FindFigure::findCircle(IplImage* src,
 			//если нашли потенциальный центр
 			if(value>=threshold)
 				{
-//				//находим прямогольник в котором будет вестись поиск
-//				CvPoint begin = cvPoint( std::max( pt.x - this->maxRadius, 0 ),
-//									 std::max( pt.y - this->maxRadius, 0 ) );
-//				CvPoint end = cvPoint( std::min( pt.x + this->maxRadius, this->accum4circle->width-1 ),
-//										std::min( pt.y + this->maxRadius, this->accum4circle->height-1 ) );
-//				
-//				//для каждой точки в выбраном прямоугольнике
-//				for(int i=begin.x; i!=end.x; i++)
-//					{
-//					for(int j=begin.y; j!=end.y; j++)
-//						{
-//						//если точка принадлежит контуру
-//						if(PIXEL(uchar, src, i, j)[0]==255)
-//							{
-//							//расстояния до выбранной точки
-//							int r = sqrt( pow( abs(i-pt.x), 2 ) + pow( abs(j-pt.y), 2 ) );
-//							//если точка находится в нужном диапозоне
-//							if(r>=this->minRadius && r<=this->maxRadius)
-//								{
-//								PIXEL(uchar, this->accum4circle, pt.x, pt.y)[r-this->minRadius+1]++;
-//								}
-//							}
-//						}
-//					}	
-				}
+				//для каждой прямой которая проголосовала за данный центр
+				for(std::vector<std::vector<mycv::Line>::iterator>::iterator it = this->accum4circle2.value[pt.x][pt.y].begin();
+					it!=this->accum4circle2.value[pt.x][pt.y].end(); ++it)
+					{
+					//для каждой точки контура который аппроксимирует данная прямая
+					for(mycv::ContourIt cIt=(*it)->contourBegin;
+						cIt!=(*it)->contourEnd; ++cIt)
+						{
+//						PIXEL(uchar, circ, cIt->x, cIt->y)[0]=255;
+//						PIXEL(uchar, circ, pt.x, pt.y)[0]=255;
+						//вычисляем расстояние от центра до точки
+						float deltaX = abs(cIt->x-pt.x);
+						float deltaY = abs(cIt->y-pt.y);
+						int r = sqrt( pow( deltaX, 2 ) + pow( deltaY, 2 ) );
+						//std::cout << ":" <<  r << std::endl;
+						PIXEL(uchar, this->accum4circle, pt.x, pt.y)[r-this->minRadius+1]++;
+						}
+					}
+				}	
 			}
 		}
+	cvShowImage("roi", circ);
 			
 #ifdef DEBUG
 	t2=clock();
@@ -222,37 +219,39 @@ int mycv::FindFigure::findCircle(IplImage* src,
 #endif
 	
 	//ище максимумы в массиве
-//	int steps_r = this->maxRadius-this->minRadius;
-//	int maxValue=0;
-//	int maxR;
-//	CvPoint maxC;
-//	for(int x=0; x<this->accum4circle->width; x++)
-//		{
-//		for(int y=0; y<this->accum4circle->height; y++)
-//			{
-//			for(int r=0; r<steps_r; r++)
-//				{
-//				value = PIXEL(uchar, this->accum4circle, x, y)[r+1];
-//				if(maxValue<value)
-//					{
-//					maxC=cvPoint(x, y);
-//					maxR=r;
-//					maxValue=value;
-//					}
-//				}
-//			}
-//		}
-//	
-//	IplImage* draw = cvCreateImage(cvGetSize(this->accum4circle), 8, 3);
-//	cvCircle(draw, maxC, maxR+this->minRadius, CV_RGB(255, 0, 0));
-//	for(int x=0; x<draw->width; x++)
-//		{
-//		for(int y=0; y<draw->height; y++)
-//			{
-//			PIXEL(uchar, draw, x, y)[0]=PIXEL(uchar, this->accum4circle, x, y)[1+maxR];
-//			}
-//		}
-//	cvShowImage("draw", draw);
+	int steps_r = this->maxRadius-this->minRadius;
+	int maxValue=0;
+	int maxR;
+	CvPoint maxC;
+	for(int x=0; x<this->accum4circle->width; x++)
+		{
+		for(int y=0; y<this->accum4circle->height; y++)
+			{
+			for(int r=0; r<steps_r; r++)
+				{
+				value = PIXEL(uchar, this->accum4circle, x, y)[r+1];
+				if(maxValue<value)
+					{
+					maxC=cvPoint(x, y);
+					maxR=r;
+					maxValue=value;
+					}
+				}
+			}
+		}
+	
+	IplImage* draw = cvCreateImage(cvGetSize(this->accum4circle), 8, 3);
+	cvZero(draw);
+	std::cout << maxR+this->minRadius << std::endl;
+	cvCircle(draw, maxC, maxR+this->minRadius, CV_RGB(255, 0, 0));
+	for(int x=0; x<draw->width; x++)
+		{
+		for(int y=0; y<draw->height; y++)
+			{
+			PIXEL(uchar, draw, x, y)[0]=PIXEL(uchar, this->accum4circle, x, y)[0]*30;
+			}
+		}
+	cvShowImage("draw", draw);
 	return 0;
 	}
 //==============================================================================
@@ -287,7 +286,9 @@ void mycv::drawLine(IplImage* src, float a, float b, float c)
 
 //Алгоритм Брезенхема
 //==============================================================================
-void mycv::drawLineB(IplImage* src, CvPoint* begin, CvPoint* end, char ty)
+void mycv::drawLineB(IplImage* src,
+					mycv::Arr2D< std::vector< std::vector<mycv::Line>::iterator > >* accum,
+					CvPoint* begin, CvPoint* end, char ty, std::vector<mycv::Line>::iterator i)
 	{
 	bool step = abs(begin->x - end->x) < abs(begin->y - end->y);	//угол больше 45град
 	
@@ -326,13 +327,18 @@ void mycv::drawLineB(IplImage* src, CvPoint* begin, CvPoint* end, char ty)
 		{
 		if(!step) 
 			{
-			if(x>=0 && x<src->width && y>=0 && y<src->height)
+			if(x>=0 && x<src->width && y>=0 && y<src->height) {
 				PIXEL(uchar, src, x, y)[0]+=ty;
+				accum->value[x][y].push_back(i);
+				}
+				
 			}
 		else 
 			{
-			if(x>=0 && x<src->height && y>=0 && y<src->width)
+			if(x>=0 && x<src->height && y>=0 && y<src->width) {
 				PIXEL(uchar, src, y, x)[0]+=ty;
+				accum->value[y][x].push_back(i);
+				}
 			}
 			
 		error+=k;

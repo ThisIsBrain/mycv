@@ -61,7 +61,7 @@ int main(int argc, char *argv[])
 	cvCanny(img, bin, 10, 100, 3);			//конттуры
 	
 	//--------------------------------------------------------------
-	mycv::FindFigure findFigure = mycv::FindFigure(size, 1, 150);
+	mycv::FindFigure findFigure = mycv::FindFigure(size, 1, 65);
 	std::vector<mycv::Line> lines;
 	std::vector<mycv::Line>::iterator lineIt;
 	std::vector<mycv::Circle> circle;
@@ -73,11 +73,11 @@ int main(int argc, char *argv[])
 	findFigure.findCircle(bin, &contours, &lines, &circle);
 	
 	//рисуем линии
-//	CvScalar color = CV_RGB(255, 0, 0);
-//	for(lineIt=lines.begin(); lineIt!=lines.end(); ++lineIt)
-//		{
-//		cvLine(img, cvPoint(lineIt->begin.x, lineIt->begin.y), cvPoint(lineIt->end.x, lineIt->end.y), CV_RGB(0, 0, 0));
-//		}
+	CvScalar color = CV_RGB(255, 0, 0);
+	for(lineIt=lines.begin(); lineIt!=lines.end(); ++lineIt)
+		{
+		cvLine(img, cvPoint(lineIt->begin.x, lineIt->begin.y), cvPoint(lineIt->end.x, lineIt->end.y), CV_RGB(0, 0, 0));
+		}
 	//--------------------------------------------------------------
 			
 	cvShowImage("src", img);
