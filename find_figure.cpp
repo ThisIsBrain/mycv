@@ -13,8 +13,10 @@ mycv::FindFigure::FindFigure(CvSize imgSize, int minR, int maxR)
 	this->minRadius = minR;
 	this->maxRadius = maxR;
 	
+	this->acc=1.5;	//точность поиска радиуса
+	
 	//аккумулятор для поиска окружностей
-	this->accum4circle = cvCreateImage(imgSize, 8, maxR-minR+1);
+	this->accum4circle = cvCreateImage(imgSize, 8, round((maxR-minR)/acc)+1);
 	this->accum4circle2.init(imgSize.width, imgSize.height);
 	}
 //==============================================================================
@@ -123,6 +125,7 @@ int mycv::FindFigure::findCircle(IplImage* src,
 	long t1, t2;
 	float t3;
 	
+	
 	//1. обнуление аккумулятора
 	cvZero(this->accum4circle);
 
@@ -177,7 +180,7 @@ int mycv::FindFigure::findCircle(IplImage* src,
 	cvZero(circ);
 	
 	//3. Уточнение окружностей
-	int threshold = 2;					//вес точки необходимый для того чтобы ее можно было считать потенциальным центром 
+	int threshold = 3;					//вес точки необходимый для того чтобы ее можно было считать потенциальным центром 
 	int value;							//вес текущей точки 
 	CvPoint pt;							//точка в поле потенциальных прямых
 	
@@ -197,14 +200,12 @@ int mycv::FindFigure::findCircle(IplImage* src,
 					for(mycv::ContourIt cIt=(*it)->contourBegin;
 						cIt!=(*it)->contourEnd; ++cIt)
 						{
-//						PIXEL(uchar, circ, cIt->x, cIt->y)[0]=255;
-//						PIXEL(uchar, circ, pt.x, pt.y)[0]=255;
 						//вычисляем расстояние от центра до точки
 						float deltaX = abs(cIt->x-pt.x);
 						float deltaY = abs(cIt->y-pt.y);
 						int r = sqrt( pow( deltaX, 2 ) + pow( deltaY, 2 ) );
-						//std::cout << ":" <<  r << std::endl;
-						PIXEL(uchar, this->accum4circle, pt.x, pt.y)[r-this->minRadius+1]++;
+						//r=round((float)(r)/acc);
+						PIXEL(uchar, this->accum4circle, pt.x, pt.y)[(int)(round((float)(r-this->minRadius)/acc))+1]++;
 						}
 					}
 				}	
@@ -219,36 +220,41 @@ int mycv::FindFigure::findCircle(IplImage* src,
 #endif
 	
 	//ище максимумы в массиве
-	int steps_r = this->maxRadius-this->minRadius;
-	int maxValue=0;
+	int steps_r = round((this->maxRadius-this->minRadius)/acc);
+	int maxValue=5;
 	int maxR;
 	CvPoint maxC;
 	for(int x=0; x<this->accum4circle->width; x++)
 		{
 		for(int y=0; y<this->accum4circle->height; y++)
 			{
-			for(int r=0; r<steps_r; r++)
+			if(PIXEL(uchar, this->accum4circle, x, y)[0]>=threshold)
 				{
-				value = PIXEL(uchar, this->accum4circle, x, y)[r+1];
-				if(maxValue<value)
+				for(int r=0; r<steps_r; r++)
 					{
-					maxC=cvPoint(x, y);
-					maxR=r;
-					maxValue=value;
+					//value = PIXEL(uchar, this->accum4circle, x, y)[r+1];
+					value = PIXEL(uchar, this->accum4circle, x, y)[r+1]/((maxR*acc+this->minRadius)/10);
+					if(maxValue<=value)
+						{
+						maxC=cvPoint(x, y);
+						maxR=r;
+						cvCircle(src, maxC, maxR*acc+this->minRadius, CV_RGB(125, 125, 125));
+						//maxValue=value;
+						}
 					}
 				}
 			}
 		}
-	
+
 	IplImage* draw = cvCreateImage(cvGetSize(this->accum4circle), 8, 3);
 	cvZero(draw);
-	std::cout << maxR+this->minRadius << std::endl;
-	cvCircle(draw, maxC, maxR+this->minRadius, CV_RGB(255, 0, 0));
+	//std::cout << maxR+this->minRadius << std::endl;
+	//cvCircle(src, maxC, maxR*acc+this->minRadius, CV_RGB(125, 125, 125));
 	for(int x=0; x<draw->width; x++)
 		{
 		for(int y=0; y<draw->height; y++)
 			{
-			PIXEL(uchar, draw, x, y)[0]=PIXEL(uchar, this->accum4circle, x, y)[0]*30;
+			PIXEL(uchar, draw, x, y)[2]=PIXEL(uchar, this->accum4circle, x, y)[maxR]*30;
 			}
 		}
 	cvShowImage("draw", draw);

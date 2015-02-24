@@ -11,12 +11,19 @@ namespace mycv
 	typedef std::vector<mycv::Contour> ContourStorage;
 	typedef std::vector<mycv::Contour>::iterator ContourStorageIt;
 	
+	struct ContourSegment
+		{
+		ContourIt begin;
+		ContourIt end;
+		};
+	
 	struct Line
 		{
 		float a;
 		float b;
 		float c;
 		
+		//ContourSegment segment;
 		CvPoint begin;
 		CvPoint end;
 		
@@ -30,6 +37,7 @@ namespace mycv
 		{
 		CvPoint center;	
 		float radius;
+		std::vector<ContourSegment> segments;	//cегмент
 		
 		float weight;
 		};
