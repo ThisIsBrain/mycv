@@ -25,6 +25,9 @@ int main(int argc, char *argv[])
 //		exit(0);
 //		}
 	
+	long t1, t2;
+	float t3;
+	
 	//img
 	IplImage* src = cvLoadImage(argv[1]);
 	if(!src)
@@ -47,6 +50,7 @@ int main(int argc, char *argv[])
 		
 	IplImage* dst;
 	IplImage* bin =	cvCreateImage(size, 8, 1);		//контур
+	IplImage* circle_img = cvCreateImage(size, 8, 3); 
 
 	//window
 	cvNamedWindow("src", 0);
@@ -54,6 +58,7 @@ int main(int argc, char *argv[])
 	cvNamedWindow("bin", 0);
 	cvNamedWindow("draw", 0);
 	cvNamedWindow("roi", 0);
+	cvNamedWindow("circle", 0);
 	
 	
 	
@@ -61,7 +66,7 @@ int main(int argc, char *argv[])
 	cvCanny(img, bin, 10, 100, 3);			//конттуры
 	
 	//--------------------------------------------------------------
-	mycv::FindFigure findFigure = mycv::FindFigure(size, 1, 65);
+	mycv::FindFigure findFigure = mycv::FindFigure(size, 10, 200);
 	std::vector<mycv::Line> lines;
 	std::vector<mycv::Line>::iterator lineIt;
 	std::vector<mycv::Circle> circle;
@@ -69,19 +74,52 @@ int main(int argc, char *argv[])
 	
 	mycv::ContourStorage contours;
 	
+	t1=clock();
+	
 	findFigure.findLine(bin, &lines, &contours);
 	findFigure.findCircle(bin, &contours, &lines, &circle);
+	
+	
+	t2=clock();
+	t3=((float)(t2)-(float)(t1))/1000;
+	std::cout << "[main]: Фигуры найдены (" << t3 << " ms)\n";
 	
 	//рисуем линии
 	CvScalar color = CV_RGB(255, 0, 0);
 	for(lineIt=lines.begin(); lineIt!=lines.end(); ++lineIt)
 		{
-		cvLine(img, cvPoint(lineIt->begin.x, lineIt->begin.y), cvPoint(lineIt->end.x, lineIt->end.y), CV_RGB(0, 0, 0));
+		cvLine(img, cvPoint(lineIt->begin.x, lineIt->begin.y), cvPoint(lineIt->end.x, lineIt->end.y), CV_RGB(0, 255, 0));
 		}
+	
+	//рисуем окружности
+	cvZero(circle_img);
+	for(circleIt=circle.begin(); circleIt!=circle.end(); ++circleIt) {
+		//рисуем окружность на исходном изображении
+		cvCircle(img, circleIt->center, circleIt->radius, CV_RGB(255, 0, 0));
+		
+		//выводим вес окружностей
+		std::cout << "weight=" << circleIt->weight << std::endl;
+		
+		//рисуем контуры окружности
+		//для каэдого сегмента
+		for(std::vector<mycv::ContourSegment>::iterator it = circleIt->segments.begin();
+			it!=circleIt->segments.end(); ++it)
+			{
+			for(mycv::ContourIt con = it->begin; con!=it->end; ++con)
+				{
+				PIXEL(uchar, circle_img, con->x, con->y)[0]=255;
+				}
+			cvLine(circle_img, *(it->begin), *(it->end), CV_RGB(0, 255, 0));
+			}
+	}
+	
+	
+	//рисуем 
 	//--------------------------------------------------------------
 			
 	cvShowImage("src", img);
 	cvShowImage("bin", bin);
+	cvShowImage("circle", circle_img);
 
 	char mode = cvWaitKey(0);
 		

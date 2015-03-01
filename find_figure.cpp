@@ -13,11 +13,13 @@ mycv::FindFigure::FindFigure(CvSize imgSize, int minR, int maxR)
 	this->minRadius = minR;
 	this->maxRadius = maxR;
 	
-	this->acc=1.5;	//точность поиска радиуса
+	this->accApprox=1.5; //точность аппроксимирования
+	this->stepRadius = (maxR+accApprox);
 	
 	//аккумулятор для поиска окружностей
-	this->accum4circle = cvCreateImage(imgSize, 8, round((maxR-minR)/acc)+1);
-	this->accum4circle2.init(imgSize.width, imgSize.height);
+	this->accum4circle = cvCreateImage(imgSize, 8, 1);
+	this->rAccum4circle.init(this->stepRadius+1);
+	this->members_circle.init(imgSize.width, imgSize.height);
 	}
 //==============================================================================
 
@@ -69,7 +71,7 @@ int mycv::FindFigure::findLine(IplImage* src,
 							&dominantPoints,			//точки 
 							dominantPoints.begin(),		//начало прямой
 							dIt,		//конец прямой
-							1.6);						//точность
+							this->accApprox);						//точность
 
 	//4. Записываем параметры прямых
 		mycv::DominantPointsIt endIt = dominantPoints.end();
@@ -124,17 +126,17 @@ int mycv::FindFigure::findCircle(IplImage* src,
 	{
 	long t1, t2;
 	float t3;
-	
-	
-	//1. обнуление аккумулятора
-	cvZero(this->accum4circle);
 
 #ifdef DEBUG
 	t1=clock();
 #endif	
 
+	//1. обнуление аккумулятора потенциальных центров
+	cvZero(this->accum4circle); 
+	
 	//2. находим потенциальные центры окружностей
 	//для каждой прямой на изображении
+
 	for(std::vector<mycv::Line>::iterator i=lines->begin(); i!=lines->end(); ++i)
 		{
 		//вычисляем прямые нормальные к касательным
@@ -158,7 +160,7 @@ int mycv::FindFigure::findCircle(IplImage* src,
 			end.y=pt.y+i->b*(float)(this->maxRadius)/vector;
 			
 			mycv::drawLineB(this->accum4circle,
-							&this->accum4circle2,
+							&this->members_circle,
 							&begin, &end, 1, i);
 			
 			i->a *= -1;
@@ -175,89 +177,142 @@ int mycv::FindFigure::findCircle(IplImage* src,
 #ifdef DEBUG
 	t1=clock();
 #endif	
-		
-	IplImage* circ = cvCreateImage(cvGetSize(src), 8, 1);
-	cvZero(circ);
+	
+	//(DEBUG)++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+	IplImage* w = cvCreateImage(cvGetSize(src), 8, 1);
+	cvZero(w);
+	for(int x=0; x<src->width; x++)
+		{
+		for(int y=0; y<src->height; y++)
+			{
+			PIXEL(uchar, w, x, y)[0] = PIXEL(uchar, this->accum4circle, x, y)[0]*30;
+			}
+		}
+	cvShowImage("draw", w);
+	//(DEBUG)++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 	
 	//3. Уточнение окружностей
-	int threshold = 3;					//вес точки необходимый для того чтобы ее можно было считать потенциальным центром 
-	int value;							//вес текущей точки 
-	CvPoint pt;							//точка в поле потенциальных прямых
+	int thresholdCenter = 2;					//вес точки необходимый для того чтобы ее можно было считать потенциальным центром 
+	float thresholdRadius = 31.4/3;				
+	int valueCenter;							//вес текущей точки 
+	CvPoint ptCenter;							//точка в поле потенциальных прямых
+	int lenContour=0;							//длинна контура аппроксимированного прямой
+	ContourSegment contour_segment;
+	mycv::Circle _circle;					//окружность
 	
-	for(pt.x=0; pt.x<this->accum4circle->width; pt.x++)
+	//для каждого возможного центра
+	for(ptCenter.x=0; ptCenter.x<this->accum4circle->width; ptCenter.x++)
 		{
-		for(pt.y=0; pt.y<this->accum4circle->height; pt.y++)
+		for(ptCenter.y=0; ptCenter.y<this->accum4circle->height; ptCenter.y++)
 			{
-			value = PIXEL(uchar, this->accum4circle, pt.x, pt.y)[0];
+			valueCenter = PIXEL(uchar, this->accum4circle, ptCenter.x, ptCenter.y)[0];
+			
 			//если нашли потенциальный центр
-			if(value>=threshold)
+			if(valueCenter>=thresholdCenter)
 				{
-				//для каждой прямой которая проголосовала за данный центр
-				for(std::vector<std::vector<mycv::Line>::iterator>::iterator it = this->accum4circle2.value[pt.x][pt.y].begin();
-					it!=this->accum4circle2.value[pt.x][pt.y].end(); ++it)
+				
+				//сбрасываем аккумулятор радиуса
+				for(int i=0; i<this->stepRadius; i++) 
 					{
+					this->rAccum4circle.value[i]=0;
+					}
+				
+				int max_value_r=0;
+				int max_number_r=0;
+				
+				_circle.segments.clear();
+				
+				//для каждой прямой которая проголосовала за данный центр
+				for(std::vector<std::vector<mycv::Line>::iterator>::iterator it = this->members_circle.value[ptCenter.x][ptCenter.y].begin();
+					it!=this->members_circle.value[ptCenter.x][ptCenter.y].end(); ++it)
+					{
+					//записываем сегмент
+					contour_segment.begin=(*it)->contourBegin;	
+					contour_segment.end=(*it)->contourEnd;
+					_circle.segments.push_back(contour_segment);
+						
 					//для каждой точки контура который аппроксимирует данная прямая
+					//lenContour=(*it)->contourEnd - (*it)->contourBegin; //вычисляем длинну контура
 					for(mycv::ContourIt cIt=(*it)->contourBegin;
 						cIt!=(*it)->contourEnd; ++cIt)
 						{
 						//вычисляем расстояние от центра до точки
-						float deltaX = abs(cIt->x-pt.x);
-						float deltaY = abs(cIt->y-pt.y);
+						float deltaX = abs(cIt->x-ptCenter.x);
+						float deltaY = abs(cIt->y-ptCenter.y);
 						int r = sqrt( pow( deltaX, 2 ) + pow( deltaY, 2 ) );
-						//r=round((float)(r)/acc);
-						PIXEL(uchar, this->accum4circle, pt.x, pt.y)[(int)(round((float)(r-this->minRadius)/acc))+1]++;
-						}
+						
+						//голос за данный радиус
+						if(r>=this->minRadius && r<this->stepRadius) 
+							{
+							this->rAccum4circle.value[r]++;	
+							}
+						
+//						//если за этот радиус проголосовало больше всего точек
+						if(this->rAccum4circle.value[r]>max_value_r) {
+							max_value_r=this->rAccum4circle.value[r];
+							max_number_r=r;
+							}	
+						}	
 					}
-				}	
+					
+					
+				//Высчитываем вес окружноости
+				float weight;	
+				if(max_number_r>0)
+					{	
+					weight = max_value_r * 10 / max_number_r;
+					}
+				else
+					{
+					std::cout << "max_number_r=0\n";
+					return -1;
+					}
+
+//(DEBUG)++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++				
+//				if(weight>=50)
+//					{
+//					std::cout << "L=" << max_value_r << std::endl;
+//					std::cout << "R=" << max_number_r << std::endl;
+//					std::cout << "value=" << valueCenter << std::endl;
+//					
+//					
+//					_circle.center.x = ptCenter.x;
+//					_circle.center.y = ptCenter.y;
+//					_circle.radius = max_number_r;
+//					_circle.weight = weight;
+//					circle->push_back(_circle);
+//					cvShowImage("roi", roi);
+//					IplImage* dst = cvCreateImage(cvGetSize(src), 8, 3);
+//					cvZero(dst);
+//					for(std::vector<ContourSegment>::iterator i = _circle.segments.begin();
+//						i!=_circle.segments.end(); ++i)
+//						{
+//						cvLine(dst, (*i->begin), (*i->end), CV_RGB(255, 255, 255));
+//						}
+//					cvShowImage("dst", dst);
+//					return 1;
+//					}
+//(DEBUG)++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+				
+				//если набран минимальный вес
+				if(thresholdRadius <= weight) 
+					{
+					_circle.center.x = ptCenter.x;
+					_circle.center.y = ptCenter.y;
+					_circle.radius = max_number_r;
+					_circle.weight = weight;
+					circle->push_back(_circle);
+					}
+				}
 			}
 		}
-	cvShowImage("roi", circ);
 			
 #ifdef DEBUG
 	t2=clock();
 	t3=((float)(t2)-(float)(t1))/1000;
 	std::cout << "[mycv::FindFigure::findCircle]: окружности найдены (" << t3 << " ms)\n";
 #endif
-	
-	//ище максимумы в массиве
-	int steps_r = round((this->maxRadius-this->minRadius)/acc);
-	int maxValue=5;
-	int maxR;
-	CvPoint maxC;
-	for(int x=0; x<this->accum4circle->width; x++)
-		{
-		for(int y=0; y<this->accum4circle->height; y++)
-			{
-			if(PIXEL(uchar, this->accum4circle, x, y)[0]>=threshold)
-				{
-				for(int r=0; r<steps_r; r++)
-					{
-					//value = PIXEL(uchar, this->accum4circle, x, y)[r+1];
-					value = PIXEL(uchar, this->accum4circle, x, y)[r+1]/((maxR*acc+this->minRadius)/10);
-					if(maxValue<=value)
-						{
-						maxC=cvPoint(x, y);
-						maxR=r;
-						cvCircle(src, maxC, maxR*acc+this->minRadius, CV_RGB(125, 125, 125));
-						//maxValue=value;
-						}
-					}
-				}
-			}
-		}
 
-	IplImage* draw = cvCreateImage(cvGetSize(this->accum4circle), 8, 3);
-	cvZero(draw);
-	//std::cout << maxR+this->minRadius << std::endl;
-	//cvCircle(src, maxC, maxR*acc+this->minRadius, CV_RGB(125, 125, 125));
-	for(int x=0; x<draw->width; x++)
-		{
-		for(int y=0; y<draw->height; y++)
-			{
-			PIXEL(uchar, draw, x, y)[2]=PIXEL(uchar, this->accum4circle, x, y)[maxR]*30;
-			}
-		}
-	cvShowImage("draw", draw);
 	return 0;
 	}
 //==============================================================================
