@@ -13,9 +13,10 @@ mycv::FindFigure::FindFigure(CvSize imgSize, int minR, int maxR)
 	this->minRadius = minR;
 	this->maxRadius = maxR;
 	
+	this->accR=1.0;
 	this->accApprox=1.5; //точность аппроксимирования
-	this->stepRadius = (maxR+accApprox);
-	
+	this->stepRadius = round((maxR - minR + accApprox) / accR);
+		
 	//аккумулятор для поиска окружностей
 	this->accum4circle = cvCreateImage(imgSize, 8, 1);
 	this->rAccum4circle.init(this->stepRadius+1);
@@ -193,7 +194,7 @@ int mycv::FindFigure::findCircle(IplImage* src,
 	
 	//3. Уточнение окружностей
 	int thresholdCenter = 2;					//вес точки необходимый для того чтобы ее можно было считать потенциальным центром 
-	float thresholdRadius = 31.4/3;				
+	float thresholdRadius = 31.4/4;				
 	int valueCenter;							//вес текущей точки 
 	CvPoint ptCenter;							//точка в поле потенциальных прямых
 	int lenContour=0;							//длинна контура аппроксимированного прямой
@@ -201,6 +202,7 @@ int mycv::FindFigure::findCircle(IplImage* src,
 	mycv::Circle _circle;					//окружность
 	
 	//для каждого возможного центра
+	//IplImage* src
 	for(ptCenter.x=0; ptCenter.x<this->accum4circle->width; ptCenter.x++)
 		{
 		for(ptCenter.y=0; ptCenter.y<this->accum4circle->height; ptCenter.y++)
@@ -210,7 +212,6 @@ int mycv::FindFigure::findCircle(IplImage* src,
 			//если нашли потенциальный центр
 			if(valueCenter>=thresholdCenter)
 				{
-				
 				//сбрасываем аккумулятор радиуса
 				for(int i=0; i<this->stepRadius; i++) 
 					{
@@ -230,6 +231,7 @@ int mycv::FindFigure::findCircle(IplImage* src,
 					contour_segment.begin=(*it)->contourBegin;	
 					contour_segment.end=(*it)->contourEnd;
 					_circle.segments.push_back(contour_segment);
+					
 						
 					//для каждой точки контура который аппроксимирует данная прямая
 					//lenContour=(*it)->contourEnd - (*it)->contourBegin; //вычисляем длинну контура
@@ -240,17 +242,17 @@ int mycv::FindFigure::findCircle(IplImage* src,
 						float deltaX = abs(cIt->x-ptCenter.x);
 						float deltaY = abs(cIt->y-ptCenter.y);
 						int r = sqrt( pow( deltaX, 2 ) + pow( deltaY, 2 ) );
-						
+						r = round((r-this->minRadius)/this->accR);
 						//голос за данный радиус
-						if(r>=this->minRadius && r<this->stepRadius) 
+						if(r>=0 && r<this->stepRadius) 
 							{
-							this->rAccum4circle.value[r]++;	
+							this->rAccum4circle.value[r]++;
 							}
 						
 //						//если за этот радиус проголосовало больше всего точек
 						if(this->rAccum4circle.value[r]>max_value_r) {
 							max_value_r=this->rAccum4circle.value[r];
-							max_number_r=r;
+							max_number_r = r * this->accR + this->minRadius;
 							}	
 						}	
 					}
@@ -259,8 +261,12 @@ int mycv::FindFigure::findCircle(IplImage* src,
 				//Высчитываем вес окружноости
 				float weight;	
 				if(max_number_r>0)
-					{	
+					{
 					weight = max_value_r * 10 / max_number_r;
+//					if(max_number_r<10)
+//						{
+//						weight /= 5;
+//						}
 					}
 				else
 					{
@@ -294,7 +300,7 @@ int mycv::FindFigure::findCircle(IplImage* src,
 //					}
 //(DEBUG)++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 				
-				//если набран минимальный вес
+				//если окружность набрала минимальный вес
 				if(thresholdRadius <= weight) 
 					{
 					_circle.center.x = ptCenter.x;
@@ -302,6 +308,7 @@ int mycv::FindFigure::findCircle(IplImage* src,
 					_circle.radius = max_number_r;
 					_circle.weight = weight;
 					circle->push_back(_circle);
+					//удаляем все прямые которые проголосовали за данную окружность
 					}
 				}
 			}
