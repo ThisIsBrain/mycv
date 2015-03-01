@@ -13,11 +13,14 @@ mycv::FindFigure::FindFigure(CvSize imgSize, int minR, int maxR)
 	this->minRadius = minR;
 	this->maxRadius = maxR;
 	
+	this->accR=1.0;
+	this->accApprox=1.5; //точность аппроксимирования
+	this->stepRadius = round((maxR - minR + accApprox) / accR);
+		
 	//аккумулятор для поиска окружностей
-	this->accum4circle = cvCreateImage(imgSize, 8, maxR-minR+1);
-	
-	//хранилище для контуров
-	this->storage=cvCreateMemStorage(0);
+	this->accum4circle = cvCreateImage(imgSize, 8, 1);
+	this->rAccum4circle.init(this->stepRadius+1);
+	this->members_circle.init(imgSize.width, imgSize.height);
 	}
 //==============================================================================
 
@@ -25,7 +28,6 @@ mycv::FindFigure::FindFigure(CvSize imgSize, int minR, int maxR)
 //==============================================================================
 mycv::FindFigure::~FindFigure()
 	{
-	cvReleaseMemStorage(&this->storage);
 	cvReleaseImage(&this->accum4circle);
 	}
 //==============================================================================
@@ -70,7 +72,7 @@ int mycv::FindFigure::findLine(IplImage* src,
 							&dominantPoints,			//точки 
 							dominantPoints.begin(),		//начало прямой
 							dIt,		//конец прямой
-							2.0);						//точность
+							this->accApprox);						//точность
 
 	//4. Записываем параметры прямых
 		mycv::DominantPointsIt endIt = dominantPoints.end();
@@ -125,16 +127,17 @@ int mycv::FindFigure::findCircle(IplImage* src,
 	{
 	long t1, t2;
 	float t3;
-	
-	//1. обнуление аккумулятора
-	cvZero(this->accum4circle);
 
 #ifdef DEBUG
 	t1=clock();
 #endif	
 
+	//1. обнуление аккумулятора потенциальных центров
+	cvZero(this->accum4circle); 
+	
 	//2. находим потенциальные центры окружностей
 	//для каждой прямой на изображении
+
 	for(std::vector<mycv::Line>::iterator i=lines->begin(); i!=lines->end(); ++i)
 		{
 		//вычисляем прямые нормальные к касательным
@@ -157,7 +160,9 @@ int mycv::FindFigure::findCircle(IplImage* src,
 			end.x=pt.x+i->a*(float)(this->maxRadius)/vector; //x0+a*step
 			end.y=pt.y+i->b*(float)(this->maxRadius)/vector;
 			
-			mycv::drawLineB(this->accum4circle, &begin, &end, 1);
+			mycv::drawLineB(this->accum4circle,
+							&this->members_circle,
+							&begin, &end, 1, i);
 			
 			i->a *= -1;
 			i->b *= -1;
@@ -173,44 +178,138 @@ int mycv::FindFigure::findCircle(IplImage* src,
 #ifdef DEBUG
 	t1=clock();
 #endif	
-		
-	//3. Уточнение окружностей
-	int threshold = 5;					//вес точки необходимый для того чтобы ее можно было считать потенциальным центром 
-	int value;							//вес текущей точки 
-	CvPoint pt;							//точка в поле потенциальных прямых
 	
-	for(pt.x=0; pt.x<this->accum4circle->width; pt.x++)
+	//(DEBUG)++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+	IplImage* w = cvCreateImage(cvGetSize(src), 8, 1);
+	cvZero(w);
+	for(int x=0; x<src->width; x++)
 		{
-		for(pt.y=0; pt.y<this->accum4circle->height; pt.y++)
+		for(int y=0; y<src->height; y++)
 			{
-			value = PIXEL(uchar, this->accum4circle, pt.x, pt.y)[0];
+			PIXEL(uchar, w, x, y)[0] = PIXEL(uchar, this->accum4circle, x, y)[0]*30;
+			}
+		}
+	cvShowImage("draw", w);
+	//(DEBUG)++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+	
+	//3. Уточнение окружностей
+	int thresholdCenter = 2;					//вес точки необходимый для того чтобы ее можно было считать потенциальным центром 
+	float thresholdRadius = 31.4/4;				
+	int valueCenter;							//вес текущей точки 
+	CvPoint ptCenter;							//точка в поле потенциальных прямых
+	int lenContour=0;							//длинна контура аппроксимированного прямой
+	ContourSegment contour_segment;
+	mycv::Circle _circle;					//окружность
+	
+	//для каждого возможного центра
+	//IplImage* src
+	for(ptCenter.x=0; ptCenter.x<this->accum4circle->width; ptCenter.x++)
+		{
+		for(ptCenter.y=0; ptCenter.y<this->accum4circle->height; ptCenter.y++)
+			{
+			valueCenter = PIXEL(uchar, this->accum4circle, ptCenter.x, ptCenter.y)[0];
+			
 			//если нашли потенциальный центр
-			if(value>=threshold)
+			if(valueCenter>=thresholdCenter)
 				{
-//				//находим прямогольник в котором будет вестись поиск
-//				CvPoint begin = cvPoint( std::max( pt.x - this->maxRadius, 0 ),
-//									 std::max( pt.y - this->maxRadius, 0 ) );
-//				CvPoint end = cvPoint( std::min( pt.x + this->maxRadius, this->accum4circle->width-1 ),
-//										std::min( pt.y + this->maxRadius, this->accum4circle->height-1 ) );
-//				
-//				//для каждой точки в выбраном прямоугольнике
-//				for(int i=begin.x; i!=end.x; i++)
-//					{
-//					for(int j=begin.y; j!=end.y; j++)
+				//сбрасываем аккумулятор радиуса
+				for(int i=0; i<this->stepRadius; i++) 
+					{
+					this->rAccum4circle.value[i]=0;
+					}
+				
+				int max_value_r=0;
+				int max_number_r=0;
+				
+				_circle.segments.clear();
+				
+				//для каждой прямой которая проголосовала за данный центр
+				for(std::vector<std::vector<mycv::Line>::iterator>::iterator it = this->members_circle.value[ptCenter.x][ptCenter.y].begin();
+					it!=this->members_circle.value[ptCenter.x][ptCenter.y].end(); ++it)
+					{
+					//записываем сегмент
+					contour_segment.begin=(*it)->contourBegin;	
+					contour_segment.end=(*it)->contourEnd;
+					_circle.segments.push_back(contour_segment);
+					
+						
+					//для каждой точки контура который аппроксимирует данная прямая
+					//lenContour=(*it)->contourEnd - (*it)->contourBegin; //вычисляем длинну контура
+					for(mycv::ContourIt cIt=(*it)->contourBegin;
+						cIt!=(*it)->contourEnd; ++cIt)
+						{
+						//вычисляем расстояние от центра до точки
+						float deltaX = abs(cIt->x-ptCenter.x);
+						float deltaY = abs(cIt->y-ptCenter.y);
+						int r = sqrt( pow( deltaX, 2 ) + pow( deltaY, 2 ) );
+						r = round((r-this->minRadius)/this->accR);
+						//голос за данный радиус
+						if(r>=0 && r<this->stepRadius) 
+							{
+							this->rAccum4circle.value[r]++;
+							}
+						
+//						//если за этот радиус проголосовало больше всего точек
+						if(this->rAccum4circle.value[r]>max_value_r) {
+							max_value_r=this->rAccum4circle.value[r];
+							max_number_r = r * this->accR + this->minRadius;
+							}	
+						}	
+					}
+					
+					
+				//Высчитываем вес окружноости
+				float weight;	
+				if(max_number_r>0)
+					{
+					weight = max_value_r * 10 / max_number_r;
+//					if(max_number_r<10)
 //						{
-//						//если точка принадлежит контуру
-//						if(PIXEL(uchar, src, i, j)[0]==255)
-//							{
-//							//расстояния до выбранной точки
-//							int r = sqrt( pow( abs(i-pt.x), 2 ) + pow( abs(j-pt.y), 2 ) );
-//							//если точка находится в нужном диапозоне
-//							if(r>=this->minRadius && r<=this->maxRadius)
-//								{
-//								PIXEL(uchar, this->accum4circle, pt.x, pt.y)[r-this->minRadius+1]++;
-//								}
-//							}
+//						weight /= 5;
 //						}
-//					}	
+					}
+				else
+					{
+					std::cout << "max_number_r=0\n";
+					return -1;
+					}
+
+//(DEBUG)++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++				
+//				if(weight>=50)
+//					{
+//					std::cout << "L=" << max_value_r << std::endl;
+//					std::cout << "R=" << max_number_r << std::endl;
+//					std::cout << "value=" << valueCenter << std::endl;
+//					
+//					
+//					_circle.center.x = ptCenter.x;
+//					_circle.center.y = ptCenter.y;
+//					_circle.radius = max_number_r;
+//					_circle.weight = weight;
+//					circle->push_back(_circle);
+//					cvShowImage("roi", roi);
+//					IplImage* dst = cvCreateImage(cvGetSize(src), 8, 3);
+//					cvZero(dst);
+//					for(std::vector<ContourSegment>::iterator i = _circle.segments.begin();
+//						i!=_circle.segments.end(); ++i)
+//						{
+//						cvLine(dst, (*i->begin), (*i->end), CV_RGB(255, 255, 255));
+//						}
+//					cvShowImage("dst", dst);
+//					return 1;
+//					}
+//(DEBUG)++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+				
+				//если окружность набрала минимальный вес
+				if(thresholdRadius <= weight) 
+					{
+					_circle.center.x = ptCenter.x;
+					_circle.center.y = ptCenter.y;
+					_circle.radius = max_number_r;
+					_circle.weight = weight;
+					circle->push_back(_circle);
+					//удаляем все прямые которые проголосовали за данную окружность
+					}
 				}
 			}
 		}
@@ -220,39 +319,7 @@ int mycv::FindFigure::findCircle(IplImage* src,
 	t3=((float)(t2)-(float)(t1))/1000;
 	std::cout << "[mycv::FindFigure::findCircle]: окружности найдены (" << t3 << " ms)\n";
 #endif
-	
-	//ище максимумы в массиве
-//	int steps_r = this->maxRadius-this->minRadius;
-//	int maxValue=0;
-//	int maxR;
-//	CvPoint maxC;
-//	for(int x=0; x<this->accum4circle->width; x++)
-//		{
-//		for(int y=0; y<this->accum4circle->height; y++)
-//			{
-//			for(int r=0; r<steps_r; r++)
-//				{
-//				value = PIXEL(uchar, this->accum4circle, x, y)[r+1];
-//				if(maxValue<value)
-//					{
-//					maxC=cvPoint(x, y);
-//					maxR=r;
-//					maxValue=value;
-//					}
-//				}
-//			}
-//		}
-//	
-//	IplImage* draw = cvCreateImage(cvGetSize(this->accum4circle), 8, 3);
-//	cvCircle(draw, maxC, maxR+this->minRadius, CV_RGB(255, 0, 0));
-//	for(int x=0; x<draw->width; x++)
-//		{
-//		for(int y=0; y<draw->height; y++)
-//			{
-//			PIXEL(uchar, draw, x, y)[0]=PIXEL(uchar, this->accum4circle, x, y)[1+maxR];
-//			}
-//		}
-//	cvShowImage("draw", draw);
+
 	return 0;
 	}
 //==============================================================================
@@ -287,7 +354,9 @@ void mycv::drawLine(IplImage* src, float a, float b, float c)
 
 //Алгоритм Брезенхема
 //==============================================================================
-void mycv::drawLineB(IplImage* src, CvPoint* begin, CvPoint* end, char ty)
+void mycv::drawLineB(IplImage* src,
+					mycv::Arr2D< std::vector< std::vector<mycv::Line>::iterator > >* accum,
+					CvPoint* begin, CvPoint* end, char ty, std::vector<mycv::Line>::iterator i)
 	{
 	bool step = abs(begin->x - end->x) < abs(begin->y - end->y);	//угол больше 45град
 	
@@ -326,13 +395,18 @@ void mycv::drawLineB(IplImage* src, CvPoint* begin, CvPoint* end, char ty)
 		{
 		if(!step) 
 			{
-			if(x>=0 && x<src->width && y>=0 && y<src->height)
+			if(x>=0 && x<src->width && y>=0 && y<src->height) {
 				PIXEL(uchar, src, x, y)[0]+=ty;
+				accum->value[x][y].push_back(i);
+				}
+				
 			}
 		else 
 			{
-			if(x>=0 && x<src->height && y>=0 && y<src->width)
+			if(x>=0 && x<src->height && y>=0 && y<src->width) {
 				PIXEL(uchar, src, y, x)[0]+=ty;
+				accum->value[y][x].push_back(i);
+				}
 			}
 			
 		error+=k;
